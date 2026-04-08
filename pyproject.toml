@@ -1,0 +1,18 @@
+[project]
+name = "tost"
+version = "0.1.0"
+description = "Token Overhead Surveillance Tool — monitor Claude Code token usage via OpenTelemetry"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.9",
+    "protobuf>=4.25",
+    "opentelemetry-proto>=1.25",
+    "textual>=0.70",
+]
+
+[project.scripts]
+tost = "tost.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

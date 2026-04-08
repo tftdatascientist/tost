@@ -1,0 +1,15 @@
+[collector]
+host = "0.0.0.0"
+port = 4318
+
+[database]
+path = "tost.db"
+
+[baseline]
+# Estimated input tokens per message for a minimal CC session
+# (no CLAUDE.md, no memory, no hooks, no plugins)
+input_tokens_per_message = 3000
+output_tokens_per_message = 100
+
+[display]
+refresh_interval = 2.0
