@@ -120,12 +120,62 @@ refresh_interval = 2.0
 
 The **baseline** section defines what a "minimal" Claude Code session would use per message. TOST shows how much more your actual setup costs compared to this baseline.
 
+## Cost Simulator
+
+TOST includes an interactive cost simulator that compares your full CC configuration against a minimal (bare) setup — component by component.
+
+```bash
+tost sim
+```
+
+### What it shows
+
+**Component breakdown** — every element that adds token overhead, with toggle on/off:
+
+| Component | Tokens/msg | Category |
+|-----------|-----------|----------|
+| System prompt (base) | 4,500 | per message |
+| Auto-memory instructions | 2,800 | per message |
+| Project memory | 1,900 | per message |
+| Skills reminder | 1,200 | per message |
+| Deferred tools catalog | 800 | per message |
+| Git status context | 500 | per message |
+| MCP tool descriptions | 350 | per message |
+| Global CLAUDE.md | 20 | per message |
+| Skills catalog | 5,200 | session start |
+| Plugin: superpowers | 3,800 | session start |
+| Plugin: vercel | 2,400 | session start |
+| ...and more | | |
+
+**Simulation parameters** (adjustable in TUI):
+- Number of messages (1–100+)
+- User/assistant tokens per message
+- Tools per message
+- Cache hit rate
+- Context retention rate
+- Model (Opus/Sonnet/Haiku)
+
+**Growth chart** — ASCII visualization of how costs diverge over a conversation, with per-message cost table.
+
+### Example output
+
+With default settings (Opus, 30 messages):
+```
+Full config:    $4.248
+Minimal config: $2.896
+Overhead:       $1.352 (+46.7%)
+```
+
 ## CLI options
 
 ```
-tost [OPTIONS]
+tost [COMMAND] [OPTIONS]
 
-Options:
+Commands:
+  monitor    Live token monitoring via OTEL (default)
+  sim        Interactive cost simulation — full vs minimal CC
+
+Monitor options:
   --config, -c PATH    Path to tost.toml
   --port, -p PORT      OTLP receiver port (default: 4318)
   --session, -s ID     Filter to specific session ID
@@ -136,10 +186,20 @@ Options:
 
 ## Keyboard shortcuts
 
+### Monitor mode
+
 | Key | Action  |
 |-----|---------|
 | `q` | Quit    |
 | `r` | Refresh |
+
+### Simulation mode
+
+| Key | Action |
+|-----|--------|
+| `q` | Quit |
+| `Enter` | Run simulation |
+| Click row | Toggle component on/off |
 
 ## Pricing reference
 
@@ -156,14 +216,16 @@ Built-in Anthropic pricing (per 1M tokens):
 ```
 tost/
   __init__.py
-  __main__.py       # python -m tost
-  cli.py            # CLI argument parsing + wiring
-  config.py         # TOML config with defaults
-  collector.py      # OTLP HTTP receiver (aiohttp)
-  store.py          # SQLite storage (cumulative → delta)
-  cost.py           # Anthropic pricing tables
-  baseline.py       # Overhead estimation vs minimal baseline
-  dashboard.py      # Textual TUI dashboard
+  __main__.py         # python -m tost
+  cli.py              # CLI + subcommands (monitor, sim)
+  config.py           # TOML config with defaults
+  collector.py        # OTLP HTTP receiver (aiohttp)
+  store.py            # SQLite storage (cumulative → delta)
+  cost.py             # Anthropic pricing tables
+  baseline.py         # Overhead estimation vs minimal baseline
+  dashboard.py        # Textual TUI — live monitoring
+  simulator.py        # Cost simulation engine
+  sim_dashboard.py    # Textual TUI — interactive simulator
 ```
 
 ## License
