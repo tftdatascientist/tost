@@ -77,8 +77,8 @@ class Store:
             prev = self._conn.execute(
                 "SELECT input_tokens, output_tokens, cache_read_tokens, "
                 "cache_creation_tokens, cost_usd FROM metric_snapshots "
-                "WHERE session_id = ? ORDER BY id DESC LIMIT 1",
-                (snap.session_id,),
+                "WHERE session_id = ? AND model = ? ORDER BY id DESC LIMIT 1",
+                (snap.session_id, snap.model),
             ).fetchone()
 
             if prev:
@@ -110,19 +110,54 @@ class Store:
             self._conn.commit()
 
     def get_session_totals(self, session_id: str | None = None) -> dict | None:
-        """Get latest cumulative totals for a session (or the most recent session)."""
+        """Get latest cumulative totals for a session (or the most recent session).
+
+        Aggregates across all models within the session. Returns the primary
+        model (highest cost) in the 'model' field.
+        """
         with self._lock:
-            if session_id:
+            sid = session_id
+            if not sid:
                 row = self._conn.execute(
-                    "SELECT * FROM metric_snapshots "
-                    "WHERE session_id = ? ORDER BY id DESC LIMIT 1",
-                    (session_id,),
+                    "SELECT session_id FROM metric_snapshots ORDER BY id DESC LIMIT 1"
                 ).fetchone()
-            else:
-                row = self._conn.execute(
-                    "SELECT * FROM metric_snapshots ORDER BY id DESC LIMIT 1"
-                ).fetchone()
-            return dict(row) if row else None
+                if not row:
+                    return None
+                sid = row["session_id"]
+
+            # Get latest snapshot per model within the session
+            rows = self._conn.execute(
+                "SELECT model, input_tokens, output_tokens, "
+                "cache_read_tokens, cache_creation_tokens, cost_usd "
+                "FROM metric_snapshots WHERE session_id = ? AND id IN ("
+                "  SELECT MAX(id) FROM metric_snapshots "
+                "  WHERE session_id = ? GROUP BY model"
+                ")",
+                (sid, sid),
+            ).fetchall()
+            if not rows:
+                return None
+
+            totals = {
+                "session_id": sid,
+                "model": "unknown",
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cost_usd": 0.0,
+            }
+            best_cost = -1.0
+            for r in rows:
+                totals["input_tokens"] += r["input_tokens"]
+                totals["output_tokens"] += r["output_tokens"]
+                totals["cache_read_tokens"] += r["cache_read_tokens"]
+                totals["cache_creation_tokens"] += r["cache_creation_tokens"]
+                totals["cost_usd"] += r["cost_usd"]
+                if r["cost_usd"] > best_cost:
+                    best_cost = r["cost_usd"]
+                    totals["model"] = r["model"]
+            return totals
 
     def get_session_deltas(
         self, session_id: str | None = None, limit: int = 50

@@ -1,1 +1,1 @@
-"""TOST — Token Overhead Surveillance Tool."""
+"""TOST — Token Optimization System Tool."""

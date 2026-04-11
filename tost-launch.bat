@@ -1,23 +1,52 @@
 @echo off
 title TOST Launcher
 echo ============================================
-echo  TOST - Token Overhead Surveillance Tool
+echo  TOST - Token Optimization System Tool
 echo ============================================
 echo.
+echo  1) Monitor — live token dashboard
+echo  2) Duel    — profile vs profile
+echo  3) Sim     — cost simulation
+echo  4) Train   — context trainer
+echo.
+set /p "CHOICE=Select mode [1-4, default=1]: "
+if "%CHOICE%"=="" set CHOICE=1
 
-:: Start TOST collector in a new window
+if "%CHOICE%"=="2" goto duel
+if "%CHOICE%"=="3" goto sim
+if "%CHOICE%"=="4" goto train
+goto monitor
+
+:duel
+echo.
+echo Starting TOST Duel...
+start "TOST Duel" cmd /k "cd /d %~dp0 && python -m tost duel"
+goto end
+
+:sim
+echo.
+echo Starting TOST Simulator...
+start "TOST Sim" cmd /k "cd /d %~dp0 && python -m tost sim"
+goto end
+
+:train
+echo.
+echo Starting TOST Trainer...
+start "TOST Trainer" cmd /k "cd /d %~dp0 && python -m tost train"
+goto end
+
+:monitor
+echo.
 echo [1/2] Starting TOST dashboard...
 start "TOST Dashboard" cmd /k "cd /d %~dp0 && python -m tost"
 
 :: Wait for collector to be ready
 timeout /t 2 /nobreak >nul
 
-:: Set OTEL env vars and launch Claude Code
-echo [2/2] Starting Claude Code with OTEL...
-set OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-set OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-set OTEL_METRICS_EXPORTER=otlp
+:: Start Claude Code (OTEL configured via ~/.claude/settings.json)
+echo [2/2] Starting Claude Code...
+echo OTEL configured via settings.json
 echo.
-echo OTEL endpoint: %OTEL_EXPORTER_OTLP_ENDPOINT%
-echo.
-claude %*
+claude --dangerously-skip-permissions %*
+
+:end

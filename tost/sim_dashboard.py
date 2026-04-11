@@ -5,6 +5,7 @@ from __future__ import annotations
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, Horizontal, VerticalScroll
+from textual.screen import Screen
 from textual.widgets import (
     Header, Footer, Static, DataTable, Label, Input, Button, Checkbox,
 )
@@ -109,14 +110,8 @@ class SimChart(Static):
         yield Label("Run simulation to see chart", id="chart-text")
 
 
-class SimDashboard(App):
-    """TOST Simulation Dashboard."""
-
-    TITLE = "TOST"
-    SUB_TITLE = "Cost Simulation — Full vs Minimal CC"
-
-    CSS = """
-    Screen {
+SIM_CSS = """
+    SimScreen, Screen {
         layout: vertical;
         overflow-y: auto;
     }
@@ -170,11 +165,18 @@ class SimDashboard(App):
         text-style: bold;
         color: $text;
     }
-    """
+"""
+
+
+class SimScreen(Screen):
+    """Simulation screen — can be pushed onto any Textual App."""
+
+    CSS = SIM_CSS
 
     BINDINGS = [
-        Binding("q", "quit", "Quit"),
+        Binding("escape", "go_back", "Back"),
         Binding("enter", "run_sim", "Run"),
+        Binding("t", "open_trainer", "Trainer"),
     ]
 
     def __init__(self, **kwargs) -> None:
@@ -205,10 +207,21 @@ class SimDashboard(App):
             self._disabled_keys.discard(key)
         else:
             self._disabled_keys.add(key)
-        # Update the "On" column
         row_data = list(table.get_row(event.row_key))
         row_data[0] = " - " if key in self._disabled_keys else "Yes"
         table.update_cell(event.row_key, table.ordered_columns[0].key, row_data[0])
+
+    def action_open_trainer(self) -> None:
+        """Open trainer from within simulator."""
+        from tost.trainer_dashboard import TrainerScreen
+        self.app.push_screen(TrainerScreen())
+
+    def action_go_back(self) -> None:
+        """Pop this screen (back to dashboard) or quit if standalone."""
+        if len(self.app.screen_stack) > 1:
+            self.app.pop_screen()
+        else:
+            self.app.exit()
 
     def action_run_sim(self) -> None:
         cfg = self.query_one(ParamsPanel).get_config()
@@ -332,3 +345,19 @@ class SimDashboard(App):
             )
 
         return lines
+
+
+class SimDashboard(App):
+    """Standalone TOST Simulation app (used by `tost sim` CLI command)."""
+
+    TITLE = "TOST"
+    SUB_TITLE = "Cost Simulation — Full vs Minimal CC"
+
+    CSS = SIM_CSS
+
+    BINDINGS = [
+        Binding("q", "quit", "Quit"),
+    ]
+
+    def on_mount(self) -> None:
+        self.push_screen(SimScreen())

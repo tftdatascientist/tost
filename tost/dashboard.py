@@ -10,7 +10,7 @@ from textual.containers import Vertical, Horizontal
 from textual.widgets import Header, Footer, Static, DataTable, Label
 
 from tost.baseline import compute_cumulative_delta, compute_message_delta
-from tost.cost import format_cost
+from tost.cost import calculate_cost, format_cost
 
 if TYPE_CHECKING:
     from tost.config import TostConfig
@@ -36,9 +36,12 @@ class TokenSummary(Static):
             label.update("No data yet")
             return
 
+        model = totals.get("model", "unknown")
+        input_cost = calculate_cost(model, input_tokens=totals["input_tokens"])
+        output_cost = calculate_cost(model, output_tokens=totals["output_tokens"])
         lines = [
-            f"  Input:     {totals['input_tokens']:>10,} tok   ({format_cost(0)})",
-            f"  Output:    {totals['output_tokens']:>10,} tok   ({format_cost(0)})",
+            f"  Input:     {totals['input_tokens']:>10,} tok   ({format_cost(input_cost)})",
+            f"  Output:    {totals['output_tokens']:>10,} tok   ({format_cost(output_cost)})",
             f"  Cache R:   {totals['cache_read_tokens']:>10,} tok",
             f"  Cache C:   {totals['cache_creation_tokens']:>10,} tok",
             f"  {'─' * 40}",
@@ -58,10 +61,10 @@ class BaselinePanel(Static):
 
 
 class TostApp(App):
-    """TOST — Token Overhead Surveillance Tool."""
+    """TOST — Token Optimization System Tool."""
 
     TITLE = "TOST"
-    SUB_TITLE = "Token Overhead Surveillance Tool"
+    SUB_TITLE = "Token Optimization System Tool"
 
     CSS = """
     Screen {
@@ -102,6 +105,9 @@ class TostApp(App):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh_data", "Refresh"),
+        Binding("s", "open_sim", "Simulator"),
+        Binding("d", "open_duel", "Duel"),
+        Binding("t", "open_trainer", "Trainer"),
     ]
 
     def __init__(self, store: Store, config: TostConfig, **kwargs) -> None:
@@ -189,6 +195,21 @@ class TostApp(App):
                 format_cost(d["delta_cost"]),
                 f"{delta_tokens:+,}",
             )
+
+    def action_open_sim(self) -> None:
+        """Open the cost simulation screen."""
+        from tost.sim_dashboard import SimScreen
+        self.push_screen(SimScreen())
+
+    def action_open_duel(self) -> None:
+        """Open the duel mode screen."""
+        from tost.duel_dashboard import DuelScreen
+        self.push_screen(DuelScreen())
+
+    def action_open_trainer(self) -> None:
+        """Open the context engineering trainer."""
+        from tost.trainer_dashboard import TrainerScreen
+        self.push_screen(TrainerScreen())
 
     def set_session_filter(self, session_id: str) -> None:
         """Filter dashboard to a specific session."""

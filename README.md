@@ -1,4 +1,4 @@
-# TOST — Token Overhead Surveillance Tool
+# TOST — Token Optimization System Tool
 
 Monitor Claude Code token usage in real-time via OpenTelemetry. See exactly how much your configuration (CLAUDE.md, memory, hooks, plugins) costs in tokens and dollars — and how that overhead grows over a conversation.
 
@@ -9,14 +9,14 @@ Monitor Claude Code token usage in real-time via OpenTelemetry. See exactly how 
 
 TOST runs as a standalone process alongside Claude Code. It:
 
-- **Collects** OTLP metrics exported natively by Claude Code (token counts, costs)
+- **Collects** OTLP metrics exported by Claude Code (token counts, costs)
 - **Stores** every data point in SQLite for full session history
 - **Displays** a live TUI dashboard with token breakdown, costs, and growth rate
 - **Estimates overhead** — compares your actual token usage against a configurable "minimal" baseline (CC with no plugins, no memory, no CLAUDE.md)
 
 ```
 ┌──────────────────────────────────────────────────┐
-│ TOST - Token Overhead Surveillance Tool   [Quit] │
+│ TOST - Token Optimization System Tool   [Quit] │
 ├──────────────────────────────────────────────────┤
 │ Session: abc123...  │  Model: opus-4              │
 ├──────────────────────────────────────────────────┤
@@ -45,7 +45,7 @@ TOST runs as a standalone process alongside Claude Code. It:
 Claude Code ──OTLP/HTTP──> TOST Collector (:4318) ──> SQLite ──> TUI Dashboard
 ```
 
-Claude Code natively exports OpenTelemetry metrics every ~5 seconds:
+Claude Code exports OpenTelemetry metrics (when `CLAUDE_CODE_ENABLE_TELEMETRY=1`):
 - `claude_code.token.usage` — input, output, cache read, cache creation tokens
 - `claude_code.cost.usage` — cumulative cost in USD
 
@@ -63,36 +63,87 @@ pip install -e .
 
 ## Quick start
 
-### One-command launcher (Windows)
+### Step 1 — Configure Claude Code (one-time setup)
 
-```bash
-tost-launch.bat
+Add OTEL environment variables to `~/.claude/settings.json`:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_METRIC_EXPORT_INTERVAL": "5000",
+    "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative"
+  }
+}
 ```
 
-This opens the TOST dashboard in a new window and starts Claude Code with OTEL export in the current terminal.
+| Variable | Why |
+|----------|-----|
+| `CLAUDE_CODE_ENABLE_TELEMETRY` | **Required.** Without it CC ignores all OTEL settings. |
+| `OTEL_METRIC_EXPORT_INTERVAL` | Export every 5s instead of the default 60s. |
+| `...TEMPORALITY_PREFERENCE` | Must be `cumulative` — CC defaults to `delta` which TOST does not expect. |
 
-### Manual startup
+Without this configuration, TOST will start but the dashboard will show "Waiting for data..." indefinitely.
+
+### Step 2 — Start TOST, then Claude Code
 
 **Terminal 1** — start TOST:
 ```bash
 tost
 ```
 
-**Terminal 2** — start Claude Code with OTEL:
+**Terminal 2** — start Claude Code:
+```bash
+claude
+```
+
+### Desktop shortcut (Windows — recommended)
+
+Create a desktop shortcut (run once):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File create-shortcut.ps1
+```
+
+Double-click the TOST shortcut on your desktop. It:
+1. Opens the TOST dashboard in its own window
+2. Launches Claude Code with `--dangerously-skip-permissions` in a second window
+3. OTEL is configured automatically via `settings.json` — no env vars needed in the launcher
+
+### Batch launcher (Windows — alternative)
+
+```bash
+tost-launch.bat
+```
+
+Same as the desktop shortcut but from the terminal.
+
+### Manual OTEL setup (alternative — without settings.json)
+
+If you prefer not to modify `settings.json`, set the variables per-session:
 
 ```bash
 # Bash / Git Bash / WSL
+export CLAUDE_CODE_ENABLE_TELEMETRY=1
+export OTEL_METRICS_EXPORTER=otlp
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-export OTEL_METRICS_EXPORTER=otlp
+export OTEL_METRIC_EXPORT_INTERVAL=5000
+export OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative
 claude
 ```
 
 ```powershell
 # PowerShell
+$env:CLAUDE_CODE_ENABLE_TELEMETRY = "1"
+$env:OTEL_METRICS_EXPORTER = "otlp"
 $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"
 $env:OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf"
-$env:OTEL_METRICS_EXPORTER = "otlp"
+$env:OTEL_METRIC_EXPORT_INTERVAL = "5000"
+$env:OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE = "cumulative"
 claude
 ```
 
@@ -192,12 +243,14 @@ Monitor options:
 |-----|---------|
 | `q` | Quit    |
 | `r` | Refresh |
+| `s` | Simulator |
+| `t` | Trainer |
 
 ### Simulation mode
 
 | Key | Action |
 |-----|--------|
-| `q` | Quit |
+| `q` / `Esc` | Back / Quit |
 | `Enter` | Run simulation |
 | Click row | Toggle component on/off |
 
@@ -217,7 +270,7 @@ Built-in Anthropic pricing (per 1M tokens):
 tost/
   __init__.py
   __main__.py         # python -m tost
-  cli.py              # CLI + subcommands (monitor, sim)
+  cli.py              # CLI + subcommands (monitor, sim, train)
   config.py           # TOML config with defaults
   collector.py        # OTLP HTTP receiver (aiohttp)
   store.py            # SQLite storage (cumulative → delta)
@@ -226,6 +279,8 @@ tost/
   dashboard.py        # Textual TUI — live monitoring
   simulator.py        # Cost simulation engine
   sim_dashboard.py    # Textual TUI — interactive simulator
+  trainer.py          # Context engineering curriculum + Haiku API
+  trainer_dashboard.py # Textual TUI — interactive trainer
 ```
 
 ## License

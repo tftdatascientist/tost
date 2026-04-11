@@ -49,47 +49,52 @@ def _parse_metrics(body: bytes, store: Store) -> int:
 
     count = 0
     for rm in req.resource_metrics:
-        # Extract session_id from resource attributes
+        # Try resource attributes first for session_id (fallback below)
         res_attrs = _attrs_to_dict(rm.resource.attributes)
-        session_id = str(res_attrs.get("session.id", "unknown"))
+        res_session_id = str(res_attrs.get("session.id", ""))
 
         for sm in rm.scope_metrics:
             # Accumulate per-(session, model) totals from this batch
-            # CC sends cumulative counters, so we take the latest value
-            accum: dict[str, dict] = {}  # key = model
+            # key = (session_id, model)
+            accum: dict[tuple[str, str], dict] = {}
 
             for metric in sm.metrics:
                 if metric.name == "claude_code.token.usage":
                     for dp in metric.sum.data_points:
                         dp_attrs = _attrs_to_dict(dp.attributes)
                         model = str(dp_attrs.get("model", "unknown"))
+                        # session.id may be in data point attrs or resource attrs
+                        session_id = str(dp_attrs.get("session.id", "")) or res_session_id or "unknown"
                         token_type = str(dp_attrs.get("type", ""))
                         value = int(dp.as_int) if dp.HasField("as_int") else int(dp.as_double)
 
-                        if model not in accum:
-                            accum[model] = {
+                        key = (session_id, model)
+                        if key not in accum:
+                            accum[key] = {
                                 "input": 0, "output": 0,
                                 "cacheRead": 0, "cacheCreation": 0,
                                 "cost": 0.0,
                             }
-                        accum[model][token_type] = value
+                        accum[key][token_type] = value
 
                 elif metric.name == "claude_code.cost.usage":
                     for dp in metric.sum.data_points:
                         dp_attrs = _attrs_to_dict(dp.attributes)
                         model = str(dp_attrs.get("model", "unknown"))
+                        session_id = str(dp_attrs.get("session.id", "")) or res_session_id or "unknown"
                         value = dp.as_double if dp.HasField("as_double") else float(dp.as_int)
 
-                        if model not in accum:
-                            accum[model] = {
+                        key = (session_id, model)
+                        if key not in accum:
+                            accum[key] = {
                                 "input": 0, "output": 0,
                                 "cacheRead": 0, "cacheCreation": 0,
                                 "cost": 0.0,
                             }
-                        accum[model]["cost"] = value
+                        accum[key]["cost"] = value
 
             # Write accumulated snapshots to store
-            for model, vals in accum.items():
+            for (session_id, model), vals in accum.items():
                 snap = MetricSnapshot(
                     session_id=session_id,
                     model=model,
