@@ -1,127 +1,129 @@
-# TOST → Notion sync — setup
+# TOST Notion Sync
 
-Two new files dropped into `tost/`:
-- `tost/jsonl_scanner.py` — reads `~/.claude/projects/*.jsonl` (Claude Code's
-  built-in session log) and aggregates token usage per session.
-- `tost/notion_sync.py` — pushes those aggregates to a Notion database every
-  60 s, upserting one page per session.
+Synchronizuje dane sesji Claude Code z bazy `~/.claude/projects/*.jsonl` do Notion. Jedna strona na sesję, aktualizowana in-place.
 
-No changes are required to existing TOST modules — `notion_sync` is runnable
-standalone via `python -m tost.notion_sync`. CLI integration is optional and
-shown at the bottom of this file.
+## Uruchomienie
 
----
-
-## 1. Create the Notion database
-
-Create a database with **exactly these property names and types** (case sensitive):
-
-| Property        | Type        | Notes                              |
-|-----------------|-------------|------------------------------------|
-| `Session`       | Title       | This is the title column           |
-| `Session ID`    | Text        | Unique key — used to upsert        |
-| `Project`       | Text        | Decoded project path               |
-| `Model`         | Select      | Auto-populates as new models appear|
-| `Started`       | Date        | Earliest message timestamp         |
-| `Last message`  | Date        | Latest message timestamp           |
-| `Messages`      | Number      | Assistant message count            |
-| `Input tokens`  | Number      |                                    |
-| `Output tokens` | Number      |                                    |
-| `Cache read`    | Number      |                                    |
-| `Cache create`  | Number      |                                    |
-| `Cost USD`      | Number (USD format) | Calculated from tost.cost  |
-
-If your title property is named something other than `Session`, pass
-`--title-property "Your Title Name"` when running.
-
-## 2. Get an integration token
-
-1. Go to <https://www.notion.so/profile/integrations>
-2. Create a new internal integration → copy the secret (`secret_…` or `ntn_…`)
-3. Open your database → ⋯ menu → Connections → add the integration
-4. Get the database ID from the URL — it's the 32-char chunk after the
-   workspace name and before `?v=`:
-   `https://www.notion.so/myws/<DATABASE_ID>?v=...`
-
-## 3. Run the sync
+### CLI
 
 ```bash
-export NOTION_TOKEN=secret_xxxxxxxxxxxx
-export NOTION_DATABASE_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# Ciągły sync co 60s
+tost sync
 
-# Default 60 s interval, runs forever
+# Jednorazowy pass
+tost sync --once -v
+
+# Zmieniony interwał
+tost sync --interval 30
+```
+
+### Standalone (bez CLI tost)
+
+```bash
 python -m tost.notion_sync
-
-# Single pass, useful for cron / debugging
 python -m tost.notion_sync --once -v
-
-# Custom interval
 python -m tost.notion_sync --interval 30
 ```
 
-State (file mtimes + session→page_id mapping) is stored in
-`~/.claude/tost_notion.db` so the loop is restart-safe and won't duplicate pages.
-
-## 4. (Optional) Wire into the `tost` CLI
-
-If you want `tost sync` instead of `python -m tost.notion_sync`, add this to
-`tost/cli.py` inside `main()` next to the other `subparsers.add_parser` calls:
+### Z innego programu (Python API)
 
 ```python
-sync = subparsers.add_parser("sync", help="Sync token usage to Notion every 60s")
-sync.add_argument("--token", default=None)
-sync.add_argument("--database-id", default=None)
-sync.add_argument("--interval", type=float, default=60.0)
-sync.add_argument("--once", action="store_true")
+import asyncio
+from tost.notion_sync import NotionConfig, run_sync_loop, DEFAULT_STATE_DB
+
+cfg = NotionConfig(
+    token="secret_xxx",              # lub ntn_xxx
+    database_id="6b9e6206...",       # 32-char hex
+    interval=60.0,                   # sekundy między passami
+    title_property="Session",        # nazwa kolumny title w Notion
+)
+
+# Jednorazowy pass
+asyncio.run(run_sync_loop(cfg, state_db=DEFAULT_STATE_DB, once=True))
+
+# Ciągły loop (blokujący)
+asyncio.run(run_sync_loop(cfg))
 ```
 
-And dispatch (next to the `if args.command == "sim":` block):
-
-```python
-if args.command == "sync":
-    import asyncio, os
-    from tost.notion_sync import NotionConfig, run_sync_loop, DEFAULT_STATE_DB
-
-    token = args.token or os.environ.get("NOTION_TOKEN")
-    db_id = args.database_id or os.environ.get("NOTION_DATABASE_ID")
-    if not token or not db_id:
-        raise SystemExit("Set NOTION_TOKEN and NOTION_DATABASE_ID env vars")
-
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(name)s %(levelname)s: %(message)s")
-    cfg = NotionConfig(token=token, database_id=db_id, interval=args.interval)
-    try:
-        asyncio.run(run_sync_loop(cfg, DEFAULT_STATE_DB, once=args.once))
-    except KeyboardInterrupt:
-        print("\nStopped.")
-    return
-```
-
-## 5. (Optional) Run sync alongside the live dashboard
-
-The collector and the Notion sync can coexist — they read different data
-sources (collector = OTLP push, sync = JSONL scrape). Run them in two
-terminals, or background one:
+### Z innego programu (subprocess)
 
 ```bash
-tost monitor &        # OTLP receiver + TUI
-tost sync             # JSONL → Notion every 60 s
+# Env vars muszą być ustawione
+NOTION_TOKEN=secret_xxx NOTION_DATABASE_ID=6b9e6206... python -m tost.notion_sync --once
 ```
 
----
+Exit code: `0` = sukces, `1` = brak tokena/database ID.
 
-## How it works
+## Konfiguracja
 
-1. **Scanner** walks `~/.claude/projects/<encoded-cwd>/*.jsonl`, parses each
-   line, picks `type=="assistant"` records, and sums up `message.usage` fields.
-   It also computes USD cost from `tost.cost.calculate_cost`.
-2. **State** (`~/.claude/tost_notion.db`) tracks the last-seen mtime per
-   JSONL file. Only changed files are rescanned each pass — this is cheap even
-   for hundreds of sessions.
-3. **First run** queries the Notion DB once to backfill `session_id → page_id`
-   so existing rows are updated, not duplicated.
-4. **Each pass** (default 60 s) upserts changed sessions: PATCH if we already
-   know the page_id, POST otherwise.
+### Zmienne środowiskowe (wymagane)
 
-Skipped: any session JSONL file >100 MB (rare, but see
-[anthropics/claude-code#22365](https://github.com/anthropics/claude-code/issues/22365)).
+| Zmienna | Opis |
+|---------|------|
+| `NOTION_TOKEN` | Token integracji Notion (`secret_...` lub `ntn_...`) |
+| `NOTION_DATABASE_ID` | ID bazy danych Notion (32-char hex) |
+
+Obsługiwane też przez `.env` w katalogu roboczym (automatyczny `load_dotenv`).
+
+### Argumenty CLI
+
+| Argument | Domyślna | Opis |
+|----------|----------|------|
+| `--once` | false | Jeden pass i wyjdź |
+| `--interval N` | 60 | Interwał w sekundach |
+| `--verbose` / `-v` | false | Logi DEBUG |
+| `--token` | env | Token (tylko `python -m tost.notion_sync`) |
+| `--database-id` | env | Database ID (tylko `python -m tost.notion_sync`) |
+| `--state-db` | `~/.claude/tost_notion.db` | Ścieżka do pliku stanu |
+| `--title-property` | `Session` | Nazwa kolumny title w Notion |
+
+## Schemat bazy Notion
+
+Nazwy właściwości są case-sensitive. Wszystkie muszą istnieć:
+
+| Właściwość | Typ | Opis |
+|------------|-----|------|
+| `Session` | Title | Tytuł strony (`projekt · id[:8]`) |
+| `Session ID` | Text | Klucz upsert — UUID sesji |
+| `Project` | Text | Zdekodowana ścieżka projektu |
+| `Model` | Select | Główny model sesji |
+| `Started` | Date | Najwcześniejsza wiadomość |
+| `Last message` | Date | Najnowsza wiadomość |
+| `Messages` | Number | Liczba wiadomości asystenta |
+| `Input tokens` | Number | |
+| `Output tokens` | Number | |
+| `Cache read` | Number | |
+| `Cache create` | Number | |
+| `Cost USD` | Number (USD) | Koszt z `tost.cost` |
+
+**Database ID:** `6b9e6206ca1f4097b342d3ecdf11598b`
+
+## Jak działa
+
+1. **Scanner** (`jsonl_scanner.py`) — czyta `~/.claude/projects/<encoded-cwd>/*.jsonl`, parsuje rekordy `type=="assistant"`, sumuje `message.usage`
+2. **State** (`~/.claude/tost_notion.db`) — SQLite z mtimes plików i mapowaniem `session_id → page_id`. Restart-safe, bez duplikatów
+3. **Pierwszy run** — odpytuje Notion DB żeby zbudować mapping istniejących stron
+4. **Kolejne passy** — skanuje tylko pliki z nowym mtime. PATCH jeśli strona istnieje, POST jeśli nie
+5. Pliki >100 MB są pomijane
+
+## Struktura kodu
+
+| Plik | Rola |
+|------|------|
+| `tost/notion_sync.py` | Klient Notion + sync loop + CLI standalone |
+| `tost/jsonl_scanner.py` | Parser JSONL → `SessionAggregate` |
+| `tost/cost.py` | Tabele cenowe Anthropic |
+
+### Kluczowe klasy i funkcje
+
+```
+NotionConfig(token, database_id, interval, title_property)  — konfiguracja
+NotionSyncState(db_path)     — persystencja stanu w SQLite
+NotionClient(cfg)            — HTTP do Notion API
+run_sync_loop(cfg, state_db, once)  — główna pętla async
+
+SessionAggregate             — dataclass z agregatem sesji
+get_changed_sessions(since_mtime)   — generator zmienionych sesji
+scan_session_file(path)      — agregat pojedynczego pliku
+scan_all_sessions()          — pełny skan (bez filtrowania po mtime)
+```

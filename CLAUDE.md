@@ -40,7 +40,8 @@ Claude Code ──OTLP/HTTP──> Collector (:4318) ──> SQLite ──> TUI 
 
 ## Konwencje
 
-- CLI entry point: `tost.cli:main`, subkomendy: `monitor` (domyślna), `sim`, `train`, `duel`
+- CLI entry point: `tost.cli:main`, subkomendy: `monitor` (domyślna), `sim`, `train`, `duel`, `sync`
+- Skróty na pulpicie: `create-shortcut.ps1` (TOST), `create-shortcut-notion-sync.ps1` (Notion Sync)
 - Dashboardy w Textual
 - Koszt liczony z `tost.cost.calculate_cost()`
 - Baza danych: SQLite (`tost.db` dla OTLP, `~/.claude/tost_notion.db` dla Notion sync)

@@ -108,10 +108,20 @@ Create a desktop shortcut (run once):
 powershell -ExecutionPolicy Bypass -File create-shortcut.ps1
 ```
 
-Double-click the TOST shortcut on your desktop. It:
+Double-click the **TOST** shortcut on your desktop. It:
 1. Opens the TOST dashboard in its own window
 2. Launches Claude Code with `--dangerously-skip-permissions` in a second window
 3. OTEL is configured automatically via `settings.json` — no env vars needed in the launcher
+
+### Notion Sync shortcut (Windows)
+
+Create a separate desktop shortcut for Notion sync:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File create-shortcut-notion-sync.ps1
+```
+
+Double-click **TOST Notion Sync** on your desktop. It loads `.env` (with `NOTION_TOKEN` and `NOTION_DATABASE_ID`) and lets you choose continuous or one-shot mode. See [NOTION_SYNC.md](NOTION_SYNC.md) for full setup.
 
 ### Batch launcher (Windows — alternative)
 
@@ -225,6 +235,9 @@ tost [COMMAND] [OPTIONS]
 Commands:
   monitor    Live token monitoring via OTEL (default)
   sim        Interactive cost simulation — full vs minimal CC
+  duel       Profile vs profile cost comparison
+  train      Context engineering trainer (powered by Haiku)
+  sync       Sync session usage to Notion database
 
 Monitor options:
   --config, -c PATH    Path to tost.toml
@@ -232,6 +245,11 @@ Monitor options:
   --session, -s ID     Filter to specific session ID
   --db PATH            SQLite database path
   --no-tui             Run collector only, no dashboard
+  --verbose, -v        Verbose logging
+
+Sync options:
+  --once               Run one sync pass and exit
+  --interval N         Sync interval in seconds (default: 60)
   --verbose, -v        Verbose logging
 ```
 
@@ -269,18 +287,22 @@ Built-in Anthropic pricing (per 1M tokens):
 ```
 tost/
   __init__.py
-  __main__.py         # python -m tost
-  cli.py              # CLI + subcommands (monitor, sim, train)
-  config.py           # TOML config with defaults
-  collector.py        # OTLP HTTP receiver (aiohttp)
-  store.py            # SQLite storage (cumulative → delta)
-  cost.py             # Anthropic pricing tables
-  baseline.py         # Overhead estimation vs minimal baseline
-  dashboard.py        # Textual TUI — live monitoring
-  simulator.py        # Cost simulation engine
-  sim_dashboard.py    # Textual TUI — interactive simulator
-  trainer.py          # Context engineering curriculum + Haiku API
-  trainer_dashboard.py # Textual TUI — interactive trainer
+  __main__.py           # python -m tost
+  cli.py                # CLI + subcommands (monitor, sim, train, duel, sync)
+  config.py             # TOML config with defaults
+  collector.py          # OTLP HTTP receiver (aiohttp)
+  store.py              # SQLite storage (cumulative → delta)
+  cost.py               # Anthropic pricing tables
+  baseline.py           # Overhead estimation vs minimal baseline
+  dashboard.py          # Textual TUI — live monitoring
+  simulator.py          # Cost simulation engine
+  sim_dashboard.py      # Textual TUI — interactive simulator
+  duel.py               # Duel engine — profile comparison
+  duel_dashboard.py     # Textual TUI — duel mode
+  trainer.py            # Context engineering curriculum + Haiku API
+  trainer_dashboard.py  # Textual TUI — interactive trainer
+  jsonl_scanner.py      # Parse ~/.claude/projects/*.jsonl → session aggregates
+  notion_sync.py        # Upsert sessions to Notion DB
 ```
 
 ## License
