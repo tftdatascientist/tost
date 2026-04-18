@@ -1,57 +1,61 @@
 # TOST — Token Optimization System Tool
 
-Monitor Claude Code token usage in real-time via OpenTelemetry. See exactly how much your configuration (CLAUDE.md, memory, hooks, plugins) costs in tokens and dollars — and how that overhead grows over a conversation.
+Monitorowanie zużycia tokenów w Claude Code (plan Max, bez API key).
+Czyta pliki JSONL z `~/.claude/projects/`, agreguje sesje, wizualizuje
+burn-rate, mierzy latency API i (opcjonalnie) synchronizuje wszystko
+do Notion.
 
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-## What it does
+## Co robi
 
-TOST runs as a standalone process alongside Claude Code. It:
+TOST to zestaw niezależnych modułów wokół jednego źródła prawdy —
+plików JSONL, które Claude Code zapisuje lokalnie dla każdej sesji.
 
-- **Collects** OTLP metrics exported by Claude Code (token counts, costs)
-- **Stores** every data point in SQLite for full session history
-- **Displays** a live TUI dashboard with token breakdown, costs, and growth rate
-- **Estimates overhead** — compares your actual token usage against a configurable "minimal" baseline (CC with no plugins, no memory, no CLAUDE.md)
+- **Dashboard sesji** (`tost monitor`) — lista sesji w TUI, tokeny,
+  koszt, ostatnia aktywność.
+- **CC panel** (`tost cc`) — TOST + terminal Claude Code obok siebie.
+- **Holmes** (`tost holmes`) — analiza anomalii sesji (6 reguł:
+  cache invalidation, overflow, think waste, MCP overload, cost
+  spike, cache creation), zapis do osobnej bazy Notion.
+- **Ping** (`tost ping-collect` + `tost ping`) — daemon mierzący
+  latency api.anthropic.com i status.anthropic.com co 5 minut;
+  po każdym pomiarze gra delikatny sonar.
+- **THC — Traffic Hours Console** (`tost thc`) — Matrix TUI z zegarem
+  UTC, tierami serwerowymi (GREEN/YELLOW/ORANGE/RED), panelem ping,
+  histogramem 24h i panelem **Taryfa**.
+- **Taryfa** — burn-rate detektor tokenów: porównuje bieżącą godzinę
+  z 7-dniową medianą tej samej godziny doby (ratio + z-score MAD),
+  sygnalizuje ZIELONA / ŻÓŁTA / POMARAŃCZOWA / CZERWONA. Syncuje
+  kubełki godzinowe do bazy Notion (auto-create).
+- **Notion sync** (`tost sync`) — upsert sesji + taryfy do Notion
+  (opcjonalne; moduły działają bez Notion).
 
-```
-┌──────────────────────────────────────────────────┐
-│ TOST - Token Optimization System Tool   [Quit] │
-├──────────────────────────────────────────────────┤
-│ Session: abc123...  │  Model: opus-4              │
-├──────────────────────────────────────────────────┤
-│ CURRENT SESSION                                   │
-│   Input:     12,450 tok   ($0.037)                │
-│   Output:     3,200 tok   ($0.048)                │
-│   Cache R:    8,100 tok                           │
-│   Cache C:    1,500 tok                           │
-│   ────────────────────────────────                │
-│   Total cost:               $0.093                │
-├──────────────────────────────────────────────────┤
-│ BASELINE DELTA                                    │
-│   Last msg:  +2,100 tok (+42% overhead)           │
-│   Cumul:     +8,450 tok (+35% overhead)           │
-├──────────────────────────────────────────────────┤
-│ MESSAGES (last 10)                                │
-│  #  Time   In     Out    Cache   Cost    Delta    │
-│  1  14:02  3100   800    2100   $0.021  +1,200    │
-│  2  14:03  4200   1200   3000   $0.035  +2,100    │
-└──────────────────────────────────────────────────┘
-```
-
-## How it works
+## Architektura
 
 ```
-Claude Code ──OTLP/HTTP──> TOST Collector (:4318) ──> SQLite ──> TUI Dashboard
+~/.claude/projects/**/*.jsonl        api.anthropic.com (HEAD)
+         │                                 │
+         ▼                                 ▼
+    jsonl_scanner                      ping.py (5 min)
+    taryfa.scan                        └─► tost_ping.db
+         │
+         ├─► tost_taryfa.db ─► taryfa_notion ─► Notion: Taryfa
+         │
+         └─► dashboard / holmes / cc_panel
+                 │
+                 ├─► notion_sync ─► Notion: Sesje
+                 └─► holmes ─► Notion: Suspects
+
+    thc.py (Matrix TUI) ← czyta wszystkie 3 SQLite + TOML tiery
+                          + sonar toggle
 ```
 
-Claude Code exports OpenTelemetry metrics (when `CLAUDE_CODE_ENABLE_TELEMETRY=1`):
-- `claude_code.token.usage` — input, output, cache read, cache creation tokens
-- `claude_code.cost.usage` — cumulative cost in USD
+Żaden moduł nie wymaga `ANTHROPIC_API_KEY` — TOST to narzędzie dla
+użytkowników planu Claude Max.
 
-TOST receives these via a lightweight HTTP endpoint, computes per-message deltas, and renders everything in a terminal dashboard.
-
-## Installation
+## Instalacja
 
 ```bash
 git clone https://github.com/tftdatascientist/tost.git
@@ -59,222 +63,96 @@ cd tost
 pip install -e .
 ```
 
-**Requirements:** Python 3.11+
+**Wymagania:** Python 3.11+ (używamy `tomllib` z stdlib).
+Windows dla sonaru (`winsound`); na macOS/Linux sonar po prostu
+nie gra, reszta działa.
 
-## Quick start
+## Szybki start
 
-### Step 1 — Configure Claude Code (one-time setup)
-
-Add OTEL environment variables to `~/.claude/settings.json`:
-
-```json
-{
-  "env": {
-    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
-    "OTEL_METRICS_EXPORTER": "otlp",
-    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
-    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
-    "OTEL_METRIC_EXPORT_INTERVAL": "5000",
-    "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative"
-  }
-}
-```
-
-| Variable | Why |
-|----------|-----|
-| `CLAUDE_CODE_ENABLE_TELEMETRY` | **Required.** Without it CC ignores all OTEL settings. |
-| `OTEL_METRIC_EXPORT_INTERVAL` | Export every 5s instead of the default 60s. |
-| `...TEMPORALITY_PREFERENCE` | Must be `cumulative` — CC defaults to `delta` which TOST does not expect. |
-
-Without this configuration, TOST will start but the dashboard will show "Waiting for data..." indefinitely.
-
-### Step 2 — Start TOST, then Claude Code
-
-**Terminal 1** — start TOST:
 ```bash
-tost
+tost monitor          # dashboard sesji (default)
+tost cc               # TOST + terminal CC
+tost holmes           # analizator anomalii
+tost ping-collect     # daemon latency (w tle, 5 min)
+tost ping             # viewer latency
+tost thc              # Matrix TUI — tiery + taryfa
+tost sync             # Notion sync (sesje + taryfa)
 ```
 
-**Terminal 2** — start Claude Code:
-```bash
-claude
+## Konfiguracja Notion (opcjonalna)
+
+Utwórz `.env` w katalogu projektu:
+
+```
+NOTION_TOKEN=secret_xxx...
+NOTION_DATABASE_ID=6b9e6206ca1f4097b342d3ecdf11598b
+
+# Opcjonalne:
+HOLMES_SUSPECTS_DB_ID=...
+PING_NOTION_DB_ID=...
+THC_NOTION_DB_ID=...
+TARYFA_NOTION_DB_ID=...
+# ALBO (auto-create bazy Taryfa pod stroną):
+TARYFA_NOTION_PARENT_PAGE_ID=...
 ```
 
-### Desktop shortcut (Windows — recommended)
+Pełna tabela zmiennych: zobacz `CLAUDE.md` sekcja *Zmienne
+środowiskowe*.
 
-Create a desktop shortcut (run once):
+## Windows — launcher na pulpicie
+
+Pojedynczy skrót z menu wszystkich modułów:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File create-shortcut.ps1
+powershell -ExecutionPolicy Bypass -File create-shortcut-launcher.ps1
 ```
 
-Double-click the **TOST** shortcut on your desktop. It:
-1. Opens the TOST dashboard in its own window
-2. Launches Claude Code with `--dangerously-skip-permissions` in a second window
-3. OTEL is configured automatically via `settings.json` — no env vars needed in the launcher
+Tworzy `TOST Launcher.lnk` na pulpicie → menu: TOST / CC / Holmes /
+Ping / THC z powrotem do menu po zamknięciu modułu.
 
-### Notion Sync shortcut (Windows)
+Dostępne są też pojedyncze skróty (szybki dostęp do jednego modułu):
+`create-shortcut.ps1`, `create-shortcut-cc.ps1`,
+`create-shortcut-holmes.ps1`, `create-shortcut-thc.ps1`,
+`create-shortcut-ping.ps1`, `create-shortcut-notion-sync.ps1`.
 
-Create a separate desktop shortcut for Notion sync:
+## Stan lokalny
 
-```powershell
-powershell -ExecutionPolicy Bypass -File create-shortcut-notion-sync.ps1
-```
+Wszystkie bazy w `~/.claude/`:
 
-Double-click **TOST Notion Sync** on your desktop. It loads `.env` (with `NOTION_TOKEN` and `NOTION_DATABASE_ID`) and lets you choose continuous or one-shot mode. See [NOTION_SYNC.md](NOTION_SYNC.md) for full setup.
+| Plik | Zawartość |
+|------|-----------|
+| `tost_notion.db` | mtimes plików + session_id → Notion page_id |
+| `tost_ping.db` | surowe pomiary latency + flagi sync |
+| `tost_taryfa.db` | kubełki godzinowe + offsety JSONL + cache DB id |
+| `tost_sonar.wav` | cache proceduralnie generowanego WAV sonaru |
+| `tost_sonar_disabled` | marker: obecność = sonar OFF |
 
-### Batch launcher (Windows — alternative)
+## Konfigurowalne progi (TOML — edytowalne bez kodu)
 
-```bash
-tost-launch.bat
-```
+- `tost/holmes_rules.toml` — progi 6 reguł Holmesa
+- `tost/thc_tiers.toml` — mapowanie godzina UTC → tier
+- `tost/taryfa_thresholds.toml` — ratio/z-score dla taryfy
 
-Same as the desktop shortcut but from the terminal.
+W THC TUI reload progów: `Ctrl+R`.
 
-### Manual OTEL setup (alternative — without settings.json)
+## Klawisze
 
-If you prefer not to modify `settings.json`, set the variables per-session:
+### Dashboard (`tost monitor`)
+`q` wyjście, `r` refresh
 
-```bash
-# Bash / Git Bash / WSL
-export CLAUDE_CODE_ENABLE_TELEMETRY=1
-export OTEL_METRICS_EXPORTER=otlp
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-export OTEL_METRIC_EXPORT_INTERVAL=5000
-export OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative
-claude
-```
+### Holmes TUI (`tost holmes`)
+`q` wyjście, `Enter` analiza, `s` push do Notion
 
-```powershell
-# PowerShell
-$env:CLAUDE_CODE_ENABLE_TELEMETRY = "1"
-$env:OTEL_METRICS_EXPORTER = "otlp"
-$env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"
-$env:OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf"
-$env:OTEL_METRIC_EXPORT_INTERVAL = "5000"
-$env:OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE = "cumulative"
-claude
-```
+### Ping viewer (`tost ping`)
+`q` wyjście, `r` refresh
 
-## Configuration
+### THC (`tost thc`)
+`q` wyjście, `r` refresh, `Ctrl+R` reload TOML (tiery + taryfa),
+`s` toggle sonaru
 
-Copy `tost.toml.example` to `tost.toml` and adjust:
+## Ceny (Anthropic)
 
-```toml
-[collector]
-host = "0.0.0.0"
-port = 4318
-
-[database]
-path = "tost.db"
-
-[baseline]
-# Estimated tokens per message for a minimal CC session
-# (no CLAUDE.md, no memory, no hooks, no plugins)
-input_tokens_per_message = 3000
-output_tokens_per_message = 100
-
-[display]
-refresh_interval = 2.0
-```
-
-The **baseline** section defines what a "minimal" Claude Code session would use per message. TOST shows how much more your actual setup costs compared to this baseline.
-
-## Cost Simulator
-
-TOST includes an interactive cost simulator that compares your full CC configuration against a minimal (bare) setup — component by component.
-
-```bash
-tost sim
-```
-
-### What it shows
-
-**Component breakdown** — every element that adds token overhead, with toggle on/off:
-
-| Component | Tokens/msg | Category |
-|-----------|-----------|----------|
-| System prompt (base) | 4,500 | per message |
-| Auto-memory instructions | 2,800 | per message |
-| Project memory | 1,900 | per message |
-| Skills reminder | 1,200 | per message |
-| Deferred tools catalog | 800 | per message |
-| Git status context | 500 | per message |
-| MCP tool descriptions | 350 | per message |
-| Global CLAUDE.md | 20 | per message |
-| Skills catalog | 5,200 | session start |
-| Plugin: superpowers | 3,800 | session start |
-| Plugin: vercel | 2,400 | session start |
-| ...and more | | |
-
-**Simulation parameters** (adjustable in TUI):
-- Number of messages (1–100+)
-- User/assistant tokens per message
-- Tools per message
-- Cache hit rate
-- Context retention rate
-- Model (Opus/Sonnet/Haiku)
-
-**Growth chart** — ASCII visualization of how costs diverge over a conversation, with per-message cost table.
-
-### Example output
-
-With default settings (Opus, 30 messages):
-```
-Full config:    $4.248
-Minimal config: $2.896
-Overhead:       $1.352 (+46.7%)
-```
-
-## CLI options
-
-```
-tost [COMMAND] [OPTIONS]
-
-Commands:
-  monitor    Live token monitoring via OTEL (default)
-  sim        Interactive cost simulation — full vs minimal CC
-  duel       Profile vs profile cost comparison
-  train      Context engineering trainer (powered by Haiku)
-  sync       Sync session usage to Notion database
-
-Monitor options:
-  --config, -c PATH    Path to tost.toml
-  --port, -p PORT      OTLP receiver port (default: 4318)
-  --session, -s ID     Filter to specific session ID
-  --db PATH            SQLite database path
-  --no-tui             Run collector only, no dashboard
-  --verbose, -v        Verbose logging
-
-Sync options:
-  --once               Run one sync pass and exit
-  --interval N         Sync interval in seconds (default: 60)
-  --verbose, -v        Verbose logging
-```
-
-## Keyboard shortcuts
-
-### Monitor mode
-
-| Key | Action  |
-|-----|---------|
-| `q` | Quit    |
-| `r` | Refresh |
-| `s` | Simulator |
-| `t` | Trainer |
-
-### Simulation mode
-
-| Key | Action |
-|-----|--------|
-| `q` / `Esc` | Back / Quit |
-| `Enter` | Run simulation |
-| Click row | Toggle component on/off |
-
-## Pricing reference
-
-Built-in Anthropic pricing (per 1M tokens):
+Wbudowane tabele cenowe (per 1M tokenów):
 
 | Model | Input | Output | Cache Read | Cache Creation |
 |-------|-------|--------|------------|----------------|
@@ -282,29 +160,30 @@ Built-in Anthropic pricing (per 1M tokens):
 | Sonnet 4 | $3.00 | $15.00 | $0.30 | $3.75 |
 | Haiku 4 | $0.80 | $4.00 | $0.08 | $1.00 |
 
-## Project structure
+## Struktura projektu
 
 ```
 tost/
-  __init__.py
-  __main__.py           # python -m tost
-  cli.py                # CLI + subcommands (monitor, sim, train, duel, sync)
-  config.py             # TOML config with defaults
-  collector.py          # OTLP HTTP receiver (aiohttp)
-  store.py              # SQLite storage (cumulative → delta)
-  cost.py               # Anthropic pricing tables
-  baseline.py           # Overhead estimation vs minimal baseline
-  dashboard.py          # Textual TUI — live monitoring
-  simulator.py          # Cost simulation engine
-  sim_dashboard.py      # Textual TUI — interactive simulator
-  duel.py               # Duel engine — profile comparison
-  duel_dashboard.py     # Textual TUI — duel mode
-  trainer.py            # Context engineering curriculum + Haiku API
-  trainer_dashboard.py  # Textual TUI — interactive trainer
-  jsonl_scanner.py      # Parse ~/.claude/projects/*.jsonl → session aggregates
-  notion_sync.py        # Upsert sessions to Notion DB
+  cli.py                  # entry point — subkomendy
+  dashboard.py            # TUI — lista sesji
+  cc_panel.py             # TUI — TOST + terminal CC
+  jsonl_scanner.py        # parser ~/.claude/projects/*.jsonl
+  notion_sync.py          # upsert sesji + taryfy do Notion
+  cost.py                 # tabele cenowe Anthropic
+  holmes.py               # silnik analizy anomalii (6 reguł)
+  holmes_ui.py            # TUI Holmesa
+  holmes_rules.toml       # progi reguł
+  ping.py                 # daemon latency + sonar trigger
+  ping_ui.py              # viewer latency
+  thc.py                  # Matrix TUI — tiery + taryfa
+  thc_tiers.py            # logika tierów GREEN..RED
+  thc_tiers.toml          # godzina UTC → tier
+  taryfa.py               # burn-rate detektor (7d baseline)
+  taryfa_notion.py        # sync kubełków do Notion (auto-create)
+  taryfa_thresholds.toml  # progi ratio/z-score
+  sound.py                # sonar (WAV + winsound.PlaySound)
 ```
 
-## License
+## Licencja
 
 MIT

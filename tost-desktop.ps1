@@ -1,61 +1,45 @@
-# TOST Desktop Launcher
-# Double-click shortcut runs this script — shows mode menu, then launches chosen mode
+﻿# TOST Desktop Launcher
 
 $projectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $projectDir
 
-# ── Mode selection menu ──
 Write-Host ""
-Write-Host "  ╔══════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "  ║   TOST — Token Optimization System   ║" -ForegroundColor Cyan
-Write-Host "  ╠══════════════════════════════════════╣" -ForegroundColor Cyan
-Write-Host "  ║  1) Monitor — live token dashboard   ║" -ForegroundColor White
-Write-Host "  ║  2) Duel    — profile vs profile     ║" -ForegroundColor Yellow
-Write-Host "  ║  3) Sim     — cost simulation        ║" -ForegroundColor Green
-Write-Host "  ║  4) Train   — context trainer         ║" -ForegroundColor Magenta
-Write-Host "  ╚══════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "  +======================================+" -ForegroundColor Cyan
+Write-Host "  |   TOST - Token Optimization System   |" -ForegroundColor Cyan
+Write-Host "  +======================================+" -ForegroundColor Cyan
+Write-Host "  |  1) Dashboard - podglad sesji (TUI)  |" -ForegroundColor White
+Write-Host "  |  2) Sync      - jednorazowy sync      |" -ForegroundColor Yellow
+Write-Host "  +======================================+" -ForegroundColor Cyan
 Write-Host ""
-$choice = Read-Host "  Select mode [1-4, default=1]"
+$choice = Read-Host "  Wybierz tryb [1-2, domyslnie=1]"
 if ([string]::IsNullOrWhiteSpace($choice)) { $choice = "1" }
 
 switch ($choice) {
     "2" {
-        # ── Duel mode — standalone, no CC needed ──
-        Start-Process powershell -ArgumentList @(
-            "-NoExit",
-            "-Command",
-            "Set-Location '$projectDir'; Write-Host '═══ TOST Duel Mode ═══' -ForegroundColor Yellow; python -m tost duel"
-        ) -WindowStyle Normal
-    }
-    "3" {
-        # ── Sim mode — standalone ──
-        Start-Process powershell -ArgumentList @(
-            "-NoExit",
-            "-Command",
-            "Set-Location '$projectDir'; Write-Host '═══ TOST Simulator ═══' -ForegroundColor Green; python -m tost sim"
-        ) -WindowStyle Normal
-    }
-    "4" {
-        # ── Trainer mode — standalone ──
-        Start-Process powershell -ArgumentList @(
-            "-NoExit",
-            "-Command",
-            "Set-Location '$projectDir'; Write-Host '═══ TOST Trainer ═══' -ForegroundColor Magenta; python -m tost train"
-        ) -WindowStyle Normal
+        $envFile = Join-Path $projectDir ".env"
+        if (Test-Path $envFile) {
+            Get-Content $envFile | ForEach-Object {
+                $line = $_.Trim()
+                if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
+                    $parts = $line -split "=", 2
+                    [Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1].Trim())
+                }
+            }
+            Write-Host "  Zaladowano .env" -ForegroundColor DarkGray
+        }
+        Write-Host ""
+        Write-Host "=== Notion Sync - jednorazowy przebieg ===" -ForegroundColor Yellow
+        python -m tost sync --once -v
+        Write-Host ""
+        Write-Host "Nacisnij Enter, aby zamknac..." -ForegroundColor DarkGray
+        Read-Host
     }
     default {
-        # ── Monitor mode — dashboard + CC ──
-        Start-Process powershell -ArgumentList @(
-            "-NoExit",
-            "-Command",
-            "Set-Location '$projectDir'; Write-Host '═══ TOST Dashboard ═══' -ForegroundColor Cyan; python -m tost"
-        ) -WindowStyle Normal
-
-        Start-Sleep -Seconds 2
-
-        Start-Process powershell -ArgumentList @(
-            "-NoExit",
-            "-Command",
-            "Set-Location '$projectDir'; Write-Host '═══ Claude Code + TOST ═══' -ForegroundColor Green; Write-Host 'OTEL -> localhost:4318 (via settings.json)' -ForegroundColor DarkGray; claude --dangerously-skip-permissions"
-        ) -WindowStyle Normal
+        Write-Host ""
+        Write-Host "=== TOST Dashboard ===" -ForegroundColor Cyan
+        python -m tost monitor
+        Write-Host ""
+        Write-Host "TOST zakonczony. Nacisnij Enter, aby zamknac." -ForegroundColor DarkGray
+        Read-Host
     }
 }

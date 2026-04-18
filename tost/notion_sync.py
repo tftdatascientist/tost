@@ -60,6 +60,10 @@ class NotionConfig:
     database_id: str
     interval: float = 60.0
     title_property: str = "Session"
+    # Taryfa — opcjonalne; jeśli parent_page_id podany, baza auto-tworzona
+    taryfa_db_id: str | None = None
+    taryfa_parent_page_id: str | None = None
+    taryfa_sync_interval: float = 900.0  # 15 min
 
 
 class NotionSyncState:
@@ -251,14 +255,54 @@ class NotionClient:
 # ── Sync loop ───────────────────────────────────────────────────────────────
 
 
+async def _taryfa_sync_pass(cfg: NotionConfig) -> None:
+    """Jeden przebieg syncu taryfy do Notion (auto-create bazy jeśli trzeba)."""
+    from tost.taryfa import TaryfaState, scan_new_records
+    from tost.taryfa_notion import resolve_taryfa_db_id, sync_taryfa_to_notion
+
+    taryfa_state = TaryfaState()
+    try:
+        scan_new_records(taryfa_state)
+
+        headers = {
+            "Authorization": f"Bearer {cfg.token}",
+            "Notion-Version": NOTION_VERSION,
+            "Content-Type": "application/json",
+        }
+        async with aiohttp.ClientSession() as http:
+            db_id = await resolve_taryfa_db_id(
+                http, headers, taryfa_state,
+                explicit_db_id=cfg.taryfa_db_id,
+                parent_page_id=cfg.taryfa_parent_page_id,
+            )
+        if not db_id:
+            log.debug("Taryfa: brak TARYFA_NOTION_DB_ID/PARENT_PAGE_ID — pomijam sync")
+            return
+
+        created, updated, failed = await sync_taryfa_to_notion(
+            taryfa_state, cfg.token, db_id,
+        )
+        if created or updated or failed:
+            log.info(
+                "Taryfa sync: %d created, %d updated, %d failed",
+                created, updated, failed,
+            )
+    finally:
+        taryfa_state.close()
+
+
 async def run_sync_loop(
     cfg: NotionConfig,
     state_db: str | Path = DEFAULT_STATE_DB,
     once: bool = False,
 ) -> None:
-    """Main sync loop — scan changed sessions every interval, push to Notion."""
+    """Main sync loop — scan changed sessions every interval, push to Notion.
+
+    Przy okazji pushuje także taryfa-buckety (co `cfg.taryfa_sync_interval`).
+    """
     state = NotionSyncState(state_db)
     client = NotionClient(cfg)
+    last_taryfa_sync = 0.0
 
     async with aiohttp.ClientSession() as http:
         # First run: backfill page_id mapping from Notion so we don't duplicate
@@ -304,6 +348,18 @@ async def run_sync_loop(
                 log.info("Pass: %d synced, %d failed", synced, failed)
             else:
                 log.debug("Pass: no changes")
+
+            # Taryfa sync (rzadziej niż sesje — 15 min)
+            now_ts = time.time()
+            should_sync_taryfa = (
+                cfg.taryfa_db_id or cfg.taryfa_parent_page_id
+            ) and (once or now_ts - last_taryfa_sync >= cfg.taryfa_sync_interval)
+            if should_sync_taryfa:
+                try:
+                    await _taryfa_sync_pass(cfg)
+                except Exception as e:  # noqa: BLE001 — sync taryfy nie może ubić pętli sesji
+                    log.error("Taryfa sync failed: %s", e)
+                last_taryfa_sync = now_ts
 
             if once:
                 break

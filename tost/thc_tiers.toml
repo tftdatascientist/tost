@@ -1,0 +1,51 @@
+# THC — progi stref poziomu zagrozenia (Traffic Hours)
+#
+# Zrodlo: oficjalne informacje Anthropic (marzec 2026) o peak hours
+# dla Claude Code / Claude Max session limits. W peak limits topnieja szybciej.
+#
+#   Peak window: Mon-Fri, 8:00 AM - 2:00 PM ET (6 godzin)
+#     - EDT (lato, marzec-listopad): 12:00-17:59 UTC
+#     - EST (zima, listopad-marzec):  13:00-18:59 UTC
+#   Off-peak: poza peak + caly weekend -> limity sesji podwojone
+#
+# Mapowanie robusne wzgledem DST:
+#   RED     13-17 UTC  (5h) — core peak, zawsze w obu rezimach DST
+#   ORANGE  12, 18 UTC (2h) — DST-dependent edge (peak tylko w jednym rezimie)
+#   YELLOW  11, 19 UTC (2h) — shoulders (godzina przed/po peak)
+#   GREEN   reszta     (15h) — off-peak wg Anthropic
+#
+# Weekendy (Sat/Sun) zawsze GREEN — hardcoded w thc_tiers.py, nie konfigurowalne.
+#
+# Referencja godzinowa (kwiecien 2026, EDT/CEST):
+#   UTC 11:00 = PL 13:00 = NYC 07:00 = LA 04:00  ← shoulder (pre-peak)
+#   UTC 12:00 = PL 14:00 = NYC 08:00 = LA 05:00  ← peak start (EDT)
+#   UTC 13:00 = PL 15:00 = NYC 09:00 = LA 06:00  ← core RED start
+#   UTC 17:00 = PL 19:00 = NYC 13:00 = LA 10:00  ← core RED end
+#   UTC 18:00 = PL 20:00 = NYC 14:00 = LA 11:00  ← peak end (EDT)
+#   UTC 19:00 = PL 21:00 = NYC 15:00 = LA 12:00  ← shoulder (post-peak)
+
+[weekday]
+0  = "GREEN"
+1  = "GREEN"
+2  = "GREEN"
+3  = "GREEN"
+4  = "GREEN"
+5  = "GREEN"
+6  = "GREEN"
+7  = "GREEN"
+8  = "GREEN"
+9  = "GREEN"
+10 = "GREEN"
+11 = "YELLOW"
+12 = "ORANGE"
+13 = "RED"
+14 = "RED"
+15 = "RED"
+16 = "RED"
+17 = "RED"
+18 = "ORANGE"
+19 = "YELLOW"
+20 = "GREEN"
+21 = "GREEN"
+22 = "GREEN"
+23 = "GREEN"

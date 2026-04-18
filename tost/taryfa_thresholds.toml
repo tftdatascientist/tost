@@ -1,0 +1,27 @@
+# Progi Taryfy — edytowalne bez dotykania kodu.
+# Taryfa porownuje biezace tempo zuzycia tokenow do 7-dniowego baselinu
+# dla tej samej godziny UTC. Dwa sygnaly: ratio (tokens_so_far / expected)
+# oraz z-score (MAD-based). Taryfa to MAX z obu.
+
+# Baseline
+baseline_days = 7          # ile dni wstecz uwzgledniamy (oprocz dzisiaj)
+min_samples   = 5          # minimum probek w baselinie; mniej -> fallback (all-day median)
+
+# Progi ratio (tokens_so_far / (median * elapsed_fraction))
+green_ratio_max  = 1.0     # ratio <=       1.0  -> ZIELONA
+yellow_ratio_max = 1.5     # 1.0 < ratio <= 1.5  -> ZOLTA
+orange_ratio_max = 2.5     # 1.5 < ratio <= 2.5  -> POMARANCZOWA
+                            # ratio  >        2.5 -> CZERWONA
+
+# Progi z-score (odleglosc od median w MAD, 1.4826-scaled ~ stdev)
+green_z_max  = 1.0
+yellow_z_max = 2.0
+orange_z_max = 3.0
+
+# Dodatkowy warunek CZERWONEJ: projekcja na koniec godziny przekroczy
+# baseline_p90 * mnoznik. Wylapuje rzadkie skoki, ktorych MAD nie zauwazy.
+p90_multiplier_red = 2.0
+
+# Minimum tokenow/min zanim cokolwiek raportujemy — unika falszywych
+# alarmow na progu godziny (np. 100 tokenow w pierwszej minucie -> projekcja 6000/h).
+min_elapsed_seconds = 120

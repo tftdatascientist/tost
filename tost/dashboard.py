@@ -1,216 +1,180 @@
-"""Textual TUI dashboard for TOST."""
+"""TOST TUI — wyświetla sesje dokładnie tak jak trafiają do Notion."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import asyncio
+from datetime import datetime, timezone
+from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, Horizontal
-from textual.widgets import Header, Footer, Static, DataTable, Label
+from textual.widgets import Header, Footer, DataTable, Label, Static
+from textual.containers import Vertical
 
-from tost.baseline import compute_cumulative_delta, compute_message_delta
-from tost.cost import calculate_cost, format_cost
-
-if TYPE_CHECKING:
-    from tost.config import TostConfig
-    from tost.store import Store
+from tost.jsonl_scanner import scan_all_sessions, SessionAggregate
+from tost.cost import format_cost
 
 
-class SessionPanel(Static):
-    """Shows current session info."""
-
-    def compose(self) -> ComposeResult:
-        yield Label("Waiting for data...", id="session-info")
+REFRESH_INTERVAL = 15.0  # sekundy
 
 
-class TokenSummary(Static):
-    """Shows token breakdown and cost for current session."""
+def _fmt_ts(iso: str) -> str:
+    """Skraca ISO timestamp do HH:MM DD-MM."""
+    if not iso:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return dt.strftime("%d-%m %H:%M")
+    except ValueError:
+        return iso[:16]
 
-    def compose(self) -> ComposeResult:
-        yield Label("No data yet", id="token-summary")
 
-    def update_data(self, totals: dict | None) -> None:
-        label = self.query_one("#token-summary", Label)
-        if not totals:
-            label.update("No data yet")
+def _short_project(project: str) -> str:
+    """Ostatni segment ścieżki projektu."""
+    return project.rstrip("/").rsplit("/", 1)[-1] or project
+
+
+def _short_model(model: str) -> str:
+    """claude-sonnet-4-6 → sonnet-4-6"""
+    return model.replace("claude-", "")
+
+
+class SummaryBar(Static):
+    """Pasek z podsumowaniem łącznym wszystkich sesji."""
+
+    DEFAULT_CSS = """
+    SummaryBar {
+        height: 3;
+        border: solid $accent;
+        padding: 0 2;
+        color: $text;
+    }
+    """
+
+    def update_summary(self, sessions: list[SessionAggregate]) -> None:
+        if not sessions:
+            self.update("Brak sesji")
             return
+        total_cost = sum(s.cost_usd for s in sessions)
+        total_in = sum(s.input_tokens for s in sessions)
+        total_out = sum(s.output_tokens for s in sessions)
+        total_msgs = sum(s.message_count for s in sessions)
+        ping_str = self._get_ping_status()
+        self.update(
+            f"Sesje: {len(sessions)}   |   "
+            f"Wiad: {total_msgs:,}   |   "
+            f"In: {total_in:,}   Out: {total_out:,}   |   "
+            f"Koszt łączny: {format_cost(total_cost)}"
+            + ping_str
+        )
 
-        model = totals.get("model", "unknown")
-        input_cost = calculate_cost(model, input_tokens=totals["input_tokens"])
-        output_cost = calculate_cost(model, output_tokens=totals["output_tokens"])
-        lines = [
-            f"  Input:     {totals['input_tokens']:>10,} tok   ({format_cost(input_cost)})",
-            f"  Output:    {totals['output_tokens']:>10,} tok   ({format_cost(output_cost)})",
-            f"  Cache R:   {totals['cache_read_tokens']:>10,} tok",
-            f"  Cache C:   {totals['cache_creation_tokens']:>10,} tok",
-            f"  {'─' * 40}",
-            f"  Total cost: {format_cost(totals['cost_usd']):>18}",
-        ]
-        label.update("\n".join(lines))
-
-
-class BaselinePanel(Static):
-    """Shows overhead vs baseline."""
-
-    def compose(self) -> ComposeResult:
-        yield Label("No baseline data", id="baseline-info")
-
-    def update_data(self, delta_text: str) -> None:
-        self.query_one("#baseline-info", Label).update(delta_text)
+    @staticmethod
+    def _get_ping_status() -> str:
+        """Odczytaj ostatni ping z tost_ping.db (jeśli istnieje)."""
+        import sqlite3
+        db_path = Path.home() / ".claude" / "tost_ping.db"
+        if not db_path.exists():
+            return ""
+        try:
+            conn = sqlite3.connect(str(db_path))
+            row = conn.execute(
+                "SELECT ttfb_ms, total_ms, status_code, timestamp "
+                "FROM ping_raw WHERE target = 'api' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            conn.close()
+            if not row:
+                return ""
+            ttfb_ms, total_ms, status_code, ts = row
+            # Stale check — starsze niż 15 min
+            try:
+                ping_time = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                age_min = (datetime.now(timezone.utc) - ping_time).total_seconds() / 60
+                if age_min > 15:
+                    return "   |   Ping: --"
+            except ValueError:
+                pass
+            if status_code and status_code < 500:
+                # TTFB = opóźnienie serwera, total = pełny cykl
+                if ttfb_ms and ttfb_ms > 0:
+                    return f"   |   API: {ttfb_ms:.0f}ms (total {total_ms:.0f}ms)"
+                return f"   |   Ping: {total_ms:.0f}ms"
+            return "   |   Ping: ERR"
+        except Exception:
+            return ""
 
 
 class TostApp(App):
-    """TOST — Token Optimization System Tool."""
+    """TOST — monitor sesji Claude Code."""
 
     TITLE = "TOST"
     SUB_TITLE = "Token Optimization System Tool"
 
     CSS = """
-    Screen {
-        layout: vertical;
-    }
-    #main-container {
-        height: 1fr;
-    }
-    #left-panel {
-        width: 1fr;
-        min-width: 44;
-    }
-    SessionPanel {
-        height: 3;
-        border: solid $accent;
-        padding: 0 1;
-    }
-    TokenSummary {
-        height: 9;
-        border: solid $accent;
-        padding: 0 1;
-    }
-    BaselinePanel {
-        height: 5;
-        border: solid $accent;
-        padding: 0 1;
-    }
-    #message-table {
-        height: 1fr;
-        border: solid $accent;
-    }
-    .panel-title {
+    Screen { layout: vertical; }
+    #title-bar {
+        height: 1;
+        padding: 0 2;
+        color: $accent;
         text-style: bold;
-        color: $text;
+    }
+    #session-table {
+        height: 1fr;
+        border: solid $accent;
     }
     """
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
-        Binding("r", "refresh_data", "Refresh"),
-        Binding("s", "open_sim", "Simulator"),
-        Binding("d", "open_duel", "Duel"),
-        Binding("t", "open_trainer", "Trainer"),
+        Binding("r", "refresh", "Odśwież"),
     ]
-
-    def __init__(self, store: Store, config: TostConfig, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self._store = store
-        self._config = config
-        self._session_id: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
-        with Vertical(id="main-container"):
-            with Horizontal():
-                with Vertical(id="left-panel"):
-                    yield Label(" SESSION ", classes="panel-title")
-                    yield SessionPanel()
-                    yield Label(" TOKENS & COST ", classes="panel-title")
-                    yield TokenSummary()
-                    yield Label(" BASELINE DELTA ", classes="panel-title")
-                    yield BaselinePanel()
-            yield Label(" MESSAGES ", classes="panel-title")
-            yield DataTable(id="message-table")
+        with Vertical():
+            yield Label(" SESJE  (odświeżanie co 15s — R aby teraz)", id="title-bar")
+            yield SummaryBar()
+            yield DataTable(id="session-table")
         yield Footer()
 
     def on_mount(self) -> None:
-        table = self.query_one("#message-table", DataTable)
-        table.add_columns("#", "Time", "In", "Out", "Cache", "Cost", "Delta")
-        table.cursor_type = "none"
-        self.set_interval(self._config.display.refresh_interval, self.action_refresh_data)
+        table = self.query_one("#session-table", DataTable)
+        table.add_columns(
+            "Projekt",
+            "Session ID",
+            "Model",
+            "Start",
+            "Ostatnia",
+            "Wiad",
+            "In tok",
+            "Out tok",
+            "Cache R",
+            "Cache C",
+            "Koszt",
+        )
+        table.cursor_type = "row"
+        self.action_refresh()
+        self.set_interval(REFRESH_INTERVAL, self.action_refresh)
 
-    def action_refresh_data(self) -> None:
-        # Determine active session
-        session_id = self._session_id or self._store.get_active_session_id()
-        if not session_id:
-            return
-
-        self._session_id = session_id
-
-        # Update session panel
-        totals = self._store.get_session_totals(session_id)
-        if totals:
-            info = self.query_one("#session-info", Label)
-            model = totals.get("model", "?")
-            info.update(f"Session: {session_id[:12]}...  |  Model: {model}")
-
-        # Update token summary
-        self.query_one(TokenSummary).update_data(totals)
-
-        # Update baseline
-        deltas = self._store.get_session_deltas(session_id)
-        if deltas:
-            last = deltas[-1]
-            msg_delta = compute_message_delta(
-                last["delta_input"], last["delta_output"],
-                self._config.baseline,
-            )
-            cum_delta = compute_cumulative_delta(deltas, self._config.baseline)
-
-            baseline_text = (
-                f"  Last msg:  {msg_delta.total_overhead:+,} tok "
-                f"({msg_delta.overhead_pct:+.0f}% overhead)\n"
-                f"  Cumul:     {cum_delta.total_overhead:+,} tok "
-                f"({cum_delta.overhead_pct:+.0f}% overhead)"
-            )
-            self.query_one(BaselinePanel).update_data(baseline_text)
-        else:
-            self.query_one(BaselinePanel).update_data("No messages yet")
-
-        # Update message table
-        table = self.query_one("#message-table", DataTable)
+    def action_refresh(self) -> None:
+        sessions = sorted(
+            scan_all_sessions(),
+            key=lambda s: s.last_message_at or "",
+            reverse=True,
+        )
+        table = self.query_one("#session-table", DataTable)
         table.clear()
-        for i, d in enumerate(deltas[-20:], 1):
-            time_str = d["received_at"].split(" ")[-1][:5] if d.get("received_at") else "?"
-            total_cache = d["delta_cache_read"] + d["delta_cache_creation"]
-            delta_tokens = (
-                d["delta_input"] + d["delta_output"]
-                - self._config.baseline.input_tokens_per_message
-                - self._config.baseline.output_tokens_per_message
-            )
+        for s in sessions:
             table.add_row(
-                str(i),
-                time_str,
-                f"{d['delta_input']:,}",
-                f"{d['delta_output']:,}",
-                f"{total_cache:,}",
-                format_cost(d["delta_cost"]),
-                f"{delta_tokens:+,}",
+                _short_project(s.project),
+                s.session_id[:12] + "…",
+                _short_model(s.primary_model),
+                _fmt_ts(s.started_at),
+                _fmt_ts(s.last_message_at),
+                str(s.message_count),
+                f"{s.input_tokens:,}",
+                f"{s.output_tokens:,}",
+                f"{s.cache_read_tokens:,}",
+                f"{s.cache_creation_tokens:,}",
+                format_cost(s.cost_usd),
             )
-
-    def action_open_sim(self) -> None:
-        """Open the cost simulation screen."""
-        from tost.sim_dashboard import SimScreen
-        self.push_screen(SimScreen())
-
-    def action_open_duel(self) -> None:
-        """Open the duel mode screen."""
-        from tost.duel_dashboard import DuelScreen
-        self.push_screen(DuelScreen())
-
-    def action_open_trainer(self) -> None:
-        """Open the context engineering trainer."""
-        from tost.trainer_dashboard import TrainerScreen
-        self.push_screen(TrainerScreen())
-
-    def set_session_filter(self, session_id: str) -> None:
-        """Filter dashboard to a specific session."""
-        self._session_id = session_id
+        self.query_one(SummaryBar).update_summary(sessions)
