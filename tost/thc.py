@@ -44,7 +44,7 @@ except Exception:  # noqa: BLE001 — fallback gdy brak tzdata
 
 from tost.ping import PingState, DEFAULT_PING_DB
 from tost.taryfa import (
-    TARYFA_COLORS, TARYFA_LABELS, TaryfaReading, TaryfaState,
+    TARYFA_COLORS, TaryfaReading, TaryfaState,
     compute_tariff, reload_thresholds, scan_new_records,
 )
 from tost.sound import is_enabled as sonar_is_enabled, toggle_enabled as sonar_toggle
@@ -387,7 +387,7 @@ class ThcClock(Vertical):
     DEFAULT_CSS = f"""
     ThcClock {{
         height: 100%;
-        padding: 1 2;
+        padding: 0 2;
         border: solid {MATRIX_MID_DARK};
         background: {MATRIX_VOID};
         color: {MATRIX_MID_LIGHT};
@@ -613,11 +613,11 @@ class ThcTaryfaPanel(Vertical):
     """
 
     # Wysokosc pionowego bar chartu (liczba wierszy slupkow dla tokenow/godz)
-    SPARK_ROWS = 5
+    SPARK_ROWS = 4
 
     DEFAULT_CSS = f"""
     ThcTaryfaPanel {{
-        height: 16;
+        height: 14;
         padding: 0 1;
         border: solid {MATRIX_MID_DARK};
         background: {MATRIX_VOID};
@@ -645,13 +645,13 @@ class ThcTaryfaPanel(Vertical):
         width: 100%;
     }}
     ThcTaryfaPanel #taryfa-spark {{
-        height: 8;
+        height: 6;
         width: 100%;
     }}
     """
 
     def compose(self) -> ComposeResult:
-        yield Static("◈ NACISK NA LIMITY  godzina · ping 1h · burn-rate", id="taryfa-header")
+        yield Static("◈ SERVER FLAGS  time · ping 1h · burn-rate", id="taryfa-header")
         with Horizontal(id="taryfa-indicators"):
             yield Static("", id="ind-tier", classes="ind-box")
             yield Static("", id="ind-ping", classes="ind-box")
@@ -672,7 +672,7 @@ class ThcTaryfaPanel(Vertical):
         tier = get_tier(now)
         tier_color = TIER_COLORS[tier]
         self.query_one("#ind-tier", Static).update(
-            f"[{MATRIX_MID}]GODZINA[/]\n"
+            f"[{MATRIX_MID}]TIME[/]\n"
             f"[bold {tier_color}]███ {tier.value} ███[/]\n"
             f"[{MATRIX_DARK}]UTC {now.hour:02d}:00 · tier serwera[/]"
         )
@@ -681,7 +681,7 @@ class ThcTaryfaPanel(Vertical):
         ping_label, ping_color = _ping_pressure_level(ping_avg_ttfb)
         ping_detail = f"{ping_avg_ttfb:.0f} ms TTFB avg 1h" if ping_avg_ttfb > 0 else "brak pomiarów"
         self.query_one("#ind-ping", Static).update(
-            f"[{MATRIX_MID}]PING 1h[/]\n"
+            f"[{MATRIX_MID}]PING[/]\n"
             f"[bold {ping_color}]███ {ping_label} ███[/]\n"
             f"[{MATRIX_DARK}]{ping_detail}[/]"
         )
@@ -693,13 +693,13 @@ class ThcTaryfaPanel(Vertical):
             burn_detail = "brak danych JSONL"
         else:
             burn_color = TARYFA_COLORS[reading.taryfa]
-            burn_label = TARYFA_LABELS[reading.taryfa]
+            burn_label = reading.taryfa.value
             if reading.baseline_used == "insufficient":
                 burn_detail = f"zbieram dane ({reading.baseline_samples} prob.)"
             else:
                 burn_detail = f"ratio {reading.ratio:.2f}× z{reading.z_score:+.1f}"
         self.query_one("#ind-burn", Static).update(
-            f"[{MATRIX_MID}]BURN TOKENOW[/]\n"
+            f"[{MATRIX_MID}]BURN[/]\n"
             f"[bold {burn_color}]███ {burn_label} ███[/]\n"
             f"[{MATRIX_DARK}]{burn_detail}[/]"
         )
@@ -745,7 +745,7 @@ class ThcTaryfaPanel(Vertical):
         base_max_label = f"{_fmt_tokens(int(base_max))} tok" if base_max > 0 else "— tok"
         left_lines = _render_chart(
             base_values, base_max, self.SPARK_ROWS, base_colors, sched, reading.hour,
-            title="7 DNI  burn median", max_label=base_max_label,
+            title="7 DNI  burn median", summary_label=base_max_label, summary_prefix="max",
             hollow=base_hollow, show_tier_dots=False,
         )
 
@@ -770,7 +770,7 @@ class ThcTaryfaPanel(Vertical):
             today_max_label = f"{_fmt_tokens(int(today_max))} tok" if today_max > 0 else "— tok"
             right_lines = _render_chart(
                 today_values, today_max, self.SPARK_ROWS, today_colors, sched, reading.hour,
-                title="DZIS  burn", max_label=today_max_label,
+                title="DZIS  burn", summary_label=today_max_label, summary_prefix="max",
                 hollow=today_hollow, show_tier_dots=False,
             )
         else:
@@ -778,7 +778,7 @@ class ThcTaryfaPanel(Vertical):
             empty_colors = [MATRIX_DARK] * 24
             right_lines = _render_chart(
                 empty_values, 1.0, self.SPARK_ROWS, empty_colors, sched, reading.hour,
-                title="DZIS  oczekiwanie", max_label="— tok",
+                title="DZIS  oczekiwanie", summary_label="— tok", summary_prefix="max",
                 hollow=set(range(24)), show_tier_dots=False,
             )
 
@@ -803,7 +803,7 @@ class Thc24hHistogram(Static):
     kropka (·), żeby doba pozostała pełna wizualnie mimo dziur w danych.
     """
 
-    BAR_ROWS = 6  # wysokość wykresu (wielowierszowy pionowy bar chart)
+    BAR_ROWS = 5  # wysokość wykresu (wielowierszowy pionowy bar chart)
 
     DEFAULT_CSS = f"""
     Thc24hHistogram {{
@@ -980,12 +980,12 @@ class ThcApp(App):
         color: {MATRIX_MID};
     }}
     #top-row {{
-        height: 14;
+        height: 13;
     }}
     #clock-box    {{ width: 2fr; }}
     #ping-box     {{ width: 1fr; }}
     #tier-box     {{ width: 1fr; }}
-    #taryfa-box   {{ height: 16; }}
+    #taryfa-box   {{ height: 14; }}
     #hist-box     {{ height: auto; }}
     #recent-log   {{ height: 1fr; }}
     """

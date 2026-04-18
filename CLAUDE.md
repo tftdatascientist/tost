@@ -131,11 +131,11 @@ Wszystko w `~/.claude/`:
 
 - **Silnik:** `tost/taryfa.py` — inkrementalny skan JSONL po byte-offset → kubełki (date, hour UTC).
 - **Algorytm:** porównuje `tokens_so_far` vs `median × elapsed_fraction` dla tej samej godziny doby z ostatnich 7 dni. Sygnały: `ratio` + `z-score` (MAD-based, 1.4826 × MAD ≈ stdev). Taryfa = MAX severity z (ratio-thresh, z-thresh, p90-multiplier).
-- **Poziomy:** ZIELONA / ŻÓŁTA / POMARAŃCZOWA / CZERWONA (same kolory co tiery serwerowe — ale niezależny sygnał).
+- **Poziomy:** GREEN / YELLOW / ORANGE / RED w TUI (same kolory co tiery serwerowe — niezależny sygnał). Etykiety PL (`TARYFA_LABELS`: ZIELONA/ŻÓŁTA/POMARAŃCZOWA/CZERWONA) używane tylko w Notion sync, nie w UI.
 - **Fallback:** < 5 próbek w baselinie per hour → all-day median z 7 dni; < 5 globalnie → ZIELONA. `min_elapsed_seconds=120` żeby nie straszyć ratio na początku godziny.
 - **Progi:** `tost/taryfa_thresholds.toml` — edytować bez kodu, reload w THC przez `Ctrl+R`.
 - **State:** `~/.claude/tost_taryfa.db` (SQLite WAL) — kubełki + offsety plików JSONL + mapowanie Notion.
-- **Widget THC:** panel pod top-rowem (height 5): label taryfy, ratio, z-score, tokens_so_far/baseline/projected, cumulative dzisiaj, koszt, mini-sparkline 24h godzin tego dnia, stan sonaru.
+- **Widget THC (`ThcTaryfaPanel`, height 14):** nagłówek `◈ SERVER FLAGS`, trzy wskaźniki w rzędzie — TIME (tier serwera) / PING (pressure avg TTFB 1h) / BURN (taryfa); pod spodem linia detali (ratio, z-score, tokens_so_far/baseline/projected, cumulative dzisiaj, koszt, stan sonaru) + sparkline 24h (lewo: 7-day baseline median, prawo: dziś).
 - **Notion DB "Taryfa":** auto-create pod `TARYFA_NOTION_PARENT_PAGE_ID` (jeśli brak `TARYFA_NOTION_DB_ID`). Pola: Slot/Date/Hour/Tokens/Cost USD/Baseline median/p90/samples/Burn ratio/Z-score/Tariff/Server tier/Synced at. Sync co 15 min w `tost sync` (lookback 2 dni, upsert po (date, hour)).
 
 ## THC — Traffic Hours Console
@@ -144,7 +144,7 @@ Wszystko w `~/.claude/`:
 - **Skrót:** `create-shortcut-thc.ps1` → `THC.lnk` na pulpicie
 - **Tiery:** GREEN (USA śpi) / YELLOW / ORANGE / RED (peak US East+West overlap) — weekendy zawsze GREEN
 - **Progi:** `tost/thc_tiers.toml` (godzina UTC → tier) — edytować bez kodu, reload w appie przez `Ctrl+R`
-- **Widgety:** Clock (UTC+lokalny, tier, 2 countdowny next/to-RED), PingPanel (now/1h/24h), TierStats (avg TTFB per tier 7d), **Taryfa** (burn-rate tokenów + sonar toggle), 24hHistogram (bar-chart UTC z barwami tierów), RecentLog
+- **Widgety:** Clock (UTC+lokalny, tier, 2 countdowny next/to-RED), PingPanel (now/1h/24h), TierStats (avg TTFB per tier 7d), **Server Flags** (`ThcTaryfaPanel`: TIME / PING / BURN — sygnał łączony tier + ping + burn-rate, + sonar toggle), 24hHistogram (bar-chart UTC z barwami tierów), RecentLog
 - **Notion DB (osobna):** `THC_NOTION_DB_ID` — 15-min buckety z polami Date/Hour/Minute/Target/Tier/Avg TTFB/Avg Total/Sample Count/Error Count
 - **Paleta:** Matrix (`#001100` tło, `#39FF14` akcent) — zgodna ze stylem projektu MTX
 - **Klawisze:** `q` wyjście, `r` odśwież, `Ctrl+R` reload TOML (tiery + taryfa), `s` toggle sonaru
